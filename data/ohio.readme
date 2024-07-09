@@ -1,0 +1,32 @@
+Description of ohio.dat file to be read into R containing Ohio county-level 
+lung cancer mortality data
+More information including data can be found at Brad Carlin's websiteo
+http://www.biostat.umn.edu/~brad/
+
+5 digit county FIPS code
+
+year
+	   1988
+sex
+           1=male
+           2=female
+
+age at death
+          1 = 0-4             7 = 45-54           
+          2 = 5-9             8 = 55-64
+          3 = 10-14           9 = 65-74
+          4 = 15-24          10 = 75-84 
+          5 = 25-34          11 = 85 +  
+          6 = 35-44
+
+race
+          1 = white
+          2 = non-white
+
+total number of deaths
+
+total population
+
+Note: Death counts and population estimates are from the NCHS Compressed
+      Mortality File.  
+

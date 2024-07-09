@@ -1,0 +1,237 @@
+#
+# Here we give code to carry out various spatial analyses of the North Carolina 
+# SIDS data
+#
+library(spdep)
+library(maptools)
+nc.sids <- readShapePoly(system.file("etc/shapes/sids.shp", 
+           package="spdep")[1],ID="FIPSNO", 
+           proj4string=CRS("+proj=longlat +ellps=clrk66"))
+names(nc.sids) # What the data frame contains     
+referencep <- sum(nc.sids$SID74)/sum(nc.sids$BIR74)
+nc.sids$Expect74 <- nc.sids$BIR74*referencep
+nc.sids$SMR74 <- nc.sids$SID74/nc.sids$Expect74
+brks <- seq(0,5,1)
+spplot(nc.sids,"SMR74",at=brks,
+       col.regions=grey.colors(5,start=.9,end=.1))
+brks <- seq(0,50,10); spplot(nc.sids,"Expect74",at=brks,
+       col.regions=grey.colors(5,start=.9,end=.1))
+#
+# Look at residuals
+#
+pmod <- glm(nc.sids$SID74~1+offset(log(nc.sids$Expect74)),
+        family=quasipoisson)
+nc.sids$resids <- 
+    (nc.sids$SID74-fitted(pmod))/sqrt(fitted(pmod))
+brks <- seq(-3,7,1)
+spplot(nc.sids,"resids",at=brks,
+       col.regions=grey.colors(11,start=.9,end=.1))
+#
+# Look at the Monte Carlo distribution of kappa hat (overdispersion parameter)
+# under the null (no overdispersion)
+#
+Y <- nc.sids$SID74
+E <- nc.sids$BIR74*sum(nc.sids$SID74)/sum(nc.sids$BIR74)
+#
+# Define a function to evaluate an estimate of kappa based on
+# fitted values only
+#
+kappaval <- function(Y,fitted,df){
+  sum((Y-fitted)^2/fitted)/df
+}
+#
+mod <- glm(Y~1,offset=log(E),family="quasipoisson")
+kappaest <- kappaval(Y,mod$fitted,mod$df.resid)
+nMC <- 1000 # Number of simulations
+ncts <- length(nc.sids$Expect74)
+#
+# Simulate all the counts under the null (of a Poisson) 
+yMC <- matrix(rpois(n=nMC*ncts,lambda=E),
+              nrow=ncts,ncol=nMC)
+kappaMC <- NULL
+for (i in 1:nMC){
+  modMC <- glm(yMC[,i]~1,offset=log(E),family="quasipoisson")
+  kappaMC[i] <- kappaval(yMC[,i],modMC$fitted,modMC$df.resid)
+}
+hist(kappaMC,xlim=c(min(kappaMC),max(kappaMC,kappaest)),
+             main="",xlab=expression(kappa))
+abline(v=kappaest,col="red")
+#
+# Bayesian random effects models using inla
+#
+# Non-standard download of the inla package using 
+# source("http://www.math.ntnu.no/inla/givemeINLA.R")
+#
+library(INLA)
+nc.sids <- readShapePoly(
+  system.file("etc/shapes/sids.shp", package="spdep")[1])
+# Create adjacency matrix
+nc.nb <- poly2nb(nc.sids)
+referencep <- sum(nc.sids$SID74)/sum(nc.sids$BIR74)
+nc.sids$EXP74 <- nc.sids$BIR74*referencep
+nc.sids$ID <- 1:100
+#
+# Model fit for independent random effects only
+#
+m0 <- inla(SID74~f(nc.sids$ID, model="iid"),family="poisson", 
+      E=nc.sids$EXP74, data=as.data.frame(nc.sids),
+      control.predictor=list(compute=TRUE))
+# Now extract the posterior mean of the relative risk
+nc.sids$RR0 <- m0$summary.fitted.values[,1]
+nc.sids$RR0
+  [1] 1.2514933 0.7664898 ... 0.8700737 0.8564938
+# Now create a binary indicator (T/F) of whether the
+# 50% quantile is above 1.5
+#
+nc.sids$RR05 <- m0$summary.fitted.values[,4]>1.5
+# Display relative risk posterior mean estimates
+spplot(nc.sids, "RR0")
+# Display areas with 0.5 quantiles above 1.5
+spplot(nc.sids, "RR05")
+#
+# Now fit a model with spatial and independent random effects
+#
+nc.sids$ID2 <- 1:100
+m1 <- inla(SID74~1+f(ID, model="iid")+
+   f(ID2, model="besag", graph="NC.graph"),
+   family="poisson", E=nc.sids$EXP74, 
+   data=as.data.frame(nc.sids),
+   control.predictor=list(compute=TRUE))
+nc.sids$RR1 <- m1$summary.fitted.values[,1]
+nc.sids$RR15 <- m1$summary.fitted.values[,4]>1.5
+# Display relative risk estimates
+spplot(nc.sids, "RR1")
+# Display areas with medians above 1.5, ie those areas 
+# with greater than 97.5% chance of exceedence of 1.5.
+spplot(nc.sids, "RR15")
+#
+# This next section of code estimates the spatial proportion
+# of the residual variability
+#
+Nareas <- 100; mat.marg <- matrix(NA, nrow=Nareas, ncol=1000)
+m <- m1$marginals.random$"ID2"
+for (i in 1:Nareas){
+  u <- m[[i]]; s <- inla.rmarginal(1000,u);mat.marg[i,] <- s}
+var.RRspatial <- mean(apply(mat.marg, 2, var))
+var.RRhet <- inla.emarginal(function(x) 1/x,
+       m1$marginals.hyper$"Precision for ID")
+var.RRhet
+var.RRspatial
+# Ratio of spatial to total
+var.RRspatial/(var.RRspatial+var.RRhet) 
+#
+# Moran's I statistic
+#
+data(nc.sids)
+col.W <- nb2listw(ncCR85.nb,style="B", zero.policy=TRUE)
+sids<-data.frame(Observed=nc.sids$SID74)
+sids<-cbind(sids, Expected=nc.sids$BIR74*sum(nc.sids$SID74)/sum(nc.sids$BIR74))
+niter<-1000
+#Permutation model
+moran.boot<-boot(sids, statistic=moranI.boot, R=niter, listw=col.W,
+n=length(ncCR85.nb), S0=Szero(col.W), applyto="SMR" )
+hist(moran.boot$t,main="",xlab="Bootstrap Moran Statistics")
+abline(v=moran.boot$t0,col="red")
+length(moran.boot$t[moran.boot$t>moran.boot$t0])/niter
+#
+sids <- data.frame(Observed=nc.sids$SID74)
+sids$Expected <- nc.sids$EXP74
+niter <- 1000
+library(DCluster)
+# Non-parametric bootstrap 
+moran.boot <- boot(sids, statistic=moranI.boot, R=niter, 
+           listw=col.W,n=length(ncCR85.nb),S0=Szero(col.W),applyto="SMR")
+# Plot the simulated statistics along with the observed
+hist(moran.boot$t,main="",xlab="Bootstrap Moran Statistics")
+abline(v=moran.boot$t0,col="red")
+length(moran.boot$t[moran.boot$t>moran.boot$t0])/niter 
+# Poisson parametric bootstrap model
+moran.pboot <- boot(sids,statistic=moranI.pboot, 
+               sim="parametric",ran.gen=poisson.sim, 
+               R=niter, listw=col.W,n=length(ncCR85.nb),
+               S0=Szero(col.W) )
+# Plot the simulated statistics along with the observed
+hist(moran.pboot$t,main="",xlab="Bootstrap Moran Statistics") 
+abline(v=moran.pboot$t0,col="red")
+length(moran.pboot$t[moran.pboot$t>moran.pboot$t0])/niter
+#
+# Openshaw method
+#
+sids <- data.frame(Observed=nc.sids$SID74,Expected=nc.sids$EXP74,
+                   x=nc.sids$east,y=nc.sids$north)
+# GAM in DCluster package
+# radius is the max radius step is the step size for the circles
+sidsgam <- opgam(data=sids, radius=50, step=10, alpha=.002)
+# radius is largest circle, step
+plot(sids$x, sids$y, xlab="Easting", ylab="Northing")
+# Plot points marked as clusters
+points(sidsgam$x, sidsgam$y, col="red", pch="*",cex=1.5)
+sidsgam
+#
+# Besag and Newell
+#
+library(SpatialEpi)
+nc.sids <- readShapePoly(system.file("etc/shapes/sids.shp",
+    package="spdep")[1],ID="FIPSNO",proj4string=
+    CRS("+proj=longlat+ellps=clrk66"))
+referencep <- sum(nc.sids$SID74)/sum(nc.sids$BIR74)
+population <- nc.sids$BIR74
+cases <- nc.sids$SID74
+E <- nc.sids$BIR74*referencep
+SMR <- cases/E
+n <- length(cases)
+centroids <- matrix(0, nrow=n, ncol=2)
+for(i in 1:n) {centroids[i, ] <- map@polygons[[i]]@labpt}
+centroids <- latlong2grid(centroids)
+colnames(centroids) <- c("x", "y")
+rownames(centroids) <- 1:n
+k <- 20
+alpha.level <- 0.01
+geo <- centroids
+BNresults <- besag.newell(geo,population,cases,
+          expected.cases=NULL,k,alpha.level)
+BNsig <- 
+ length(BNresults$p.values[BNresults$p.values<alpha.level])
+cat("No of sig results = ",BNsig,"\n") # =10
+resmat <- matrix(NA,nrow=BNsig,ncol=100); reslen <- NULL
+for (i in 1:length(BNresults$clusters)){
+   reslen[i] <- 
+   length(BNresults$clusters[[i]]$location.IDs.included)
+   resmat[i,1:reslen[i]] <- 
+   BNresults$clusters[[i]]$location.IDs.included
+}
+par(mfrow=c(2,3))
+for (i in 1:5){
+   plot(NC.new)
+   plot(NC.new[resmat[i,c(1:reslen[i])]],col="red",add=T)}
+for (i in 6:10){
+   plot(NC.new)
+   plot(NC.new[resmat[i,c(1:reslen[i])]],col="red",add=T)}
+#
+# Kulldorff
+#
+pop.upper.bound <- 0.2
+n.simulations <- 999
+alpha.level <- 0.05
+Kpoisson <- kulldorff(geo, cases, population, expected.cases=NULL, 
+pop.upper.bound, n.simulations, alpha.level, plot=T)
+Kcluster <- Kpoisson$most.likely.cluster$location.IDs.included
+plot(NC.new,axes=TRUE)
+plot(NC.new[Kcluster],add=TRUE,col="red")
+title("Most Likely Cluster")
+#
+# Secondary clusters
+#
+K2cluster <- 
+  Kpoisson$secondary.clusters[[1]]$location.IDs.included
+plot(NC.new,axes=TRUE)
+plot(NC.new[K2cluster],add=TRUE,col="red")
+title("2nd Most Likely Cluster")
+#
+K3cluster <- 
+  Kpoisson$secondary.clusters[[2]]$location.IDs.included
+plot(NC.new,axes=TRUE)
+plot(NC.new[K3cluster],add=TRUE,col="red")
+title("3rd Most Likely Cluster")
+
+
