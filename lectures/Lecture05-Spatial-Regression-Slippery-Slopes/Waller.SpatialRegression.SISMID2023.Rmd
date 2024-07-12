@@ -1,0 +1,84 @@
+---
+title: "Waller SISMID 2023:  NY Leukemia Spatial Regression with INLA"
+author: "Lance A. Waller"
+date: "7/18/2023"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## New York Leukemia Data Spatial Poisson Regression with INLA Example
+
+NY Leukemia anlaysis with INLA from https://www.rdocumentation.org/packages/spdep/versions/0.6-15/topics/NY_data
+and https://www.r-bloggers.com/spatial-data-analysis-with-inla/ 
+
+```{r }
+##Load libraries
+
+library(spdep)
+library(INLA)
+
+# Set my working directory (Lance's here for example)
+# setwd("~/OneDrive - Emory University/meetings/SISMID.2021/SISMID.2021.Waller.Rcode")
+
+# Read in data (included in the 'foreign' library.)
+library(foreign)
+nydata <- read.dbf(system.file("etc/misc/nydata.dbf", package="spdep")[1])
+```
+
+Now format the data for INLA (this needs to be more clearly documented, but these steps put the right values from the dataset into the variable names needed for INLA)
+
+```{r }
+# Format data for INLA
+coordinates(nydata) <- c("X", "Y")
+nyadjmat <- as.matrix(read.dbf(system.file("etc/misc/nyadjwts.dbf",
+                                           package="spdep")[1])[-1])
+ID <- as.character(names(read.dbf(system.file("etc/misc/nyadjwts.dbf",
+                                              package="spdep")[1]))[-1])
+identical(substring(ID, 2, 10), substring(as.character(nydata$AREAKEY), 2, 10))
+nyadjlw <- mat2listw(nyadjmat, as.character(nydata$AREAKEY))
+listw_NY <- nb2listw(nyadjlw$neighbours, style="B")
+
+
+```
+
+Now let's calculate the overall rate (total number of cases over total population size).
+
+Next, find the number of cases in each tract if this overall rate were applied to the tract-level population size.
+
+Finally, calculate the standardized mortality ratio, the number observed divided by the number expected (if the overall rate applied equally everywhere).
+
+```{r }
+# Calculate overall rate
+rate <- sum(nydata$TRACTCAS) / sum(nydata$POP8)
+
+# Set expected number of cases (population * rate)
+Expected <- nydata$POP8 * rate
+
+# Calculate standardized mortality ratio (SMR)
+SMR <- nydata$TRACTCAS / nydata$Expected
+
+```
+
+Now fit the ICAR model and output the estimates.
+
+```{r }
+# Fit ICAR model
+# Assuming here that the order of nydata and nyadjmat are the same
+ID_new <- seq(nrow(nydata)) # I think INLA needs the IDs to be 1:n
+nydata$ID_new <- ID_new
+nyadjlw <- mat2listw(nyadjmat, row.names = ID_new)
+listw_NY <- nb2listw(nyadjlw$neighbours, style="B")
+# FEED THE FOLLOWING INTO INLA'S graph ARGUMENT instead of listw_NY
+nyadj_matrix <- as(nb2mat(nyadjlw$neighbours, style = "B"), "Matrix")
+
+m.icar <- inla(trunc(TRACTCAS) ~ 1 + PCTAGE65P + AVGIDIST + PCTOWNHOME +
+                 f(ID_new, model = "besag", graph = nyadj_matrix),
+               data = as.data.frame(nydata), E = Expected, family ="poisson",
+               control.predictor = list(compute = TRUE),
+               control.compute = list(dic = TRUE, waic = TRUE))
+
+summary(m.icar)
+```

@@ -1,0 +1,160 @@
+
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+# SISMID Spatial Satistics
+# Data Lab 8 Modelling Space-Time Areal Data
+***
+
+# 8.1 Data Wrangling and Visualization 
+
+Specify working directory and load R data file. The dataframe contains annual cases of chlamydia for 18 years (2002 to 2019) for each of the 159 county in Georgia. The rate is also given per 100,000 people. 
+
+```{r}
+
+## Select "Chlamydia_GA.RData" from "files" tab 
+load ("Chlamydia_GA.RData")
+str (dat)
+```
+
+To create year-specific chloropleth maps, we will first create an sf object that will replicate the polygons. Then we will merge the dataset by county ID and year. To better visualize temporal trend, we will use a *spaghetti* plot.
+
+```{r}
+library (sf)
+library (maps)
+library (stringr)
+
+#Get GA county polygon and create FIPS ID
+county.map = map ("county", region = c("georgia"),fill = T,  plot = F)
+county.map = sf::st_as_sf(county.map) #Convert from map object to sf
+data (county.fips) #Load county 5-digit FIPS code
+county.map$FIPS = county.fips$fips[ match (county.map$ID, county.fips$polyname)]
+county.map$FIPS =  str_pad (county.map$FIPS, 5, "left", "0")
+
+#Replicate the map polygons 18 times 
+#First create a list. Then stack by row. 
+dat.map = vector ("list", 18)
+for (i in 1:18){
+  dat.map[[i]] = county.map
+  dat.map[[i]]$Year = 2001+i
+}
+dat.map = do.call(rbind, dat.map[])
+
+#Merge with chlamydia data by county FIPS and year
+dat.map = merge (dat.map, dat, by = c("FIPS", "Year"))
+
+#Finally, the chlorepleth map.
+library (ggplot2)
+ggplot (dat.map) + geom_sf (aes (fill=Rate))+ facet_wrap (~Year, ncol = 6)+
+  scale_fill_gradient(low = "lightblue",high = "red",)+theme_bw()+theme(axis.text=element_text(size=5))
+
+#Spaghetti plot for trend. We will also add the mean rates across counties for each year. We see a large between-county variability and there is a sharp increase in recent years, especially among a few counties. 
+p = ggplot (data=dat.map, aes(Year, Rate, color = FIPS, alpha = 0.01))
+p + geom_line()+guides (color = "none", alpha = "none")+theme_bw()+
+   stat_summary(aes(group = 1), geom = "point", fun.y = mean, shape = 17, size = 3) 
+
+```
+
+# 8.2 Mixed effect model  
+
+We will first fit standard *random intercept* models by assuming additive spatial (county-specific) and temporal (year-specific) deveiations from the mean. These random effects are also assumed to independent of each other. We will again use INLA and you can use the *summary ()* funciton to get estimated parameters from each model. 
+
+```{r}
+library (INLA)
+
+#Work with centered year and by decade to help with intepretation and model fitting
+dat$Year_cen = (dat$Year - 2002)/10
+
+## A set of common parameters for INLA
+inla.control = list (dic = TRUE,waic = TRUE, cpo = TRUE, return.marginals.predictor=TRUE)
+
+## Create spatial and temporal ID (1, 2, ... etc)
+dat$ID_space = as.numeric (factor (dat$FIPS))
+dat$ID_time = as.numeric (factor (dat$Year))
+
+#Use population as offset
+fit1 = inla (Cases~1+Year_cen + f(ID_space, model = "iid"), E= Pop, family = "poisson", data = dat,                  control.compute = inla.control)
+
+fit2 = inla (Cases~1+Year_cen + f(ID_space, model = "iid")+f(ID_time, model="iid"), E= Pop, family = "poisson", data = dat,control.compute = inla.control)
+
+#Compare the spatial random effects estimated
+ggplot () + geom_sf (data = county.map, aes (fill = fit1$summary.random[[1]]$mean))+
+  scale_fill_gradient2(low = "blue",high = "red", name = "")+ggtitle("Model 1: Spatial Random Effect")
+
+ggplot () + geom_sf (data = county.map, aes (fill = fit2$summary.random$ID_space$mean))+
+  scale_fill_gradient2(low = "blue",high = "red", name = "")+ggtitle("Model 2: Spatial + Temporal Random Effects")
+
+#Here we extract the temporal random effect (year)
+ggplot (fit2$summary.random$ID_time) + geom_point(aes(y=mean, x = 2002:2019), shape=15, size=3) +
+  geom_linerange(aes(ymin=`0.025quant`, ymax=`0.975quant`, x= 2002:2019)) + 
+  theme_bw()+ geom_hline(yintercept=0, col = "blue")+xlab("Year") + ylab("Log Relative Risk")+
+  ggtitle("Residual Year-specific Independent Random Effects")
+
+```
+
+# 8.3 Additive Spatially and Temporally-Dependent Random Effects
+
+Next we will extend the additive random effects to spatially dependent (via CAR model) or temporally dependent (via random-walk). We again need to create adjancy information (first-order spatial neighborhood) and space/time IDs for INLA. 
+
+```{r}
+library (spdep)
+dat_proj = st_transform(county.map, crs = "ESRI:102004")
+nb = poly2nb (dat_proj)
+nb2INLA ("adj.txt", nb) #write out a file
+G <- inla.read.graph(filename = "adj.txt") #read in to get INLA's graph format
+
+dat$ID_space = as.numeric (factor (dat$FIPS))
+dat$ID_space_2 = dat$ID_space
+dat$ID_time = as.numeric (factor (dat$Year))
+
+#Besag + RW-1
+fit3 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G)  + 
+               f(ID_time, model = "rw1"), 
+             E= Pop, family = "poisson", data = dat, control.compute = inla.control)
+
+#Convolution (BYM) + RW-1
+fit4 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G) +  f(ID_space_2) + 
+               f(ID_time, model = "rw1"), E= Pop, family = "poisson", data = dat, control.compute = inla.control)
+
+#Besag + RW-2
+fit5 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G)  + 
+               f(ID_time, model = "rw2"), E= Pop, family = "poisson", data = dat, control.compute = inla.control)
+
+#Convolution (BYM) + RW-2
+fit6 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G) +  f(ID_space_2) + 
+               f(ID_time, model = "rw2"), E= Pop, family = "poisson", data = dat, control.compute = inla.control)
+
+#We see that the estimated temporal random effects have very large uncertainties at the end and not very smooth. 
+ggplot (fit3$summary.random$ID_time) + geom_point(aes(y=mean, x = 2002:2019), shape=15, size=3) +  
+  geom_linerange(aes(ymin=`0.025quant`, ymax=`0.975quant`, x= 2002:2019)) + 
+  theme_bw()+ geom_hline(yintercept=0, col = "blue")+xlab("Year") + ylab("Log Relative Risk")+
+  ggtitle("Residual Year-specific Independent Random Effects")
+
+```
+# 8.4 Space-time Interactions
+
+To allow for time-specific spatial effects, we use the *group* option in specifying the spatial random effects. The dependency structure across group (i.e., year) can be specified as a separable covariance structure. These models take a bit longer to fit. 
+
+```{r}
+dat$ID_space_time = 1:nrow (dat)
+
+#A model with iid space-time interaction random effects
+fit7 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G) +  f(ID_space_time) + 
+               f(ID_time), E= Pop, family = "poisson", data = dat, control.compute = inla.control)
+
+
+#Independent across time 
+fit8 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G, group = ID_time, control.group = list(model = "iid")) + f(ID_time),  E= Pop, family = "poisson", data = dat, control.compute = inla.control) 
+
+#Exchangeable across time
+fit9 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G, group = ID_time, control.group = list(model = "exchangeable")) + f(ID_time),  E= Pop, family = "poisson", data = dat, control.compute = inla.control) 
+
+#Dynamic (Autoregressive order-1) 
+fit10 = inla (Cases~1+Year_cen + f(ID_space, model = "besag", graph = G, group = ID_time, control.group = list(model = "ar1")) + f(ID_time),  E= Pop, family = "poisson", data = dat, control.compute = inla.control) 
+```
+
+

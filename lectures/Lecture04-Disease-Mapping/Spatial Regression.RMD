@@ -1,0 +1,223 @@
+---
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+
+```
+
+
+# SISMID Spatial Satistics
+# Data Lab 4 Disease Mapping with Conditional Autoregressive Models
+***
+
+# 4.1 Introduction to Conditional Autoregressive Models
+
+We will first load the dataframe with shapefile of chlamydia incidence and income from previous lab.
+ 
+```{r}
+## Install dependencies for INLA 
+
+## Install INLA Package
+devtools::install_github(repo = "https://github.com/hrue/r-inla", ref = "stable", subdir = "rinla", build = FALSE)
+## Load all needed packages
+pacman::p_load(sf, 
+               ggplot2, 
+               spdep, 
+               spatialreg, 
+               INLA, 
+               here # For constructing filepaths relative to root directory
+      )
+load (here("data", "Data_Areal.RData") )
+st_drop_geometry(dat.areal)[1:4,]
+
+
+```
+
+CAR models can be fitted using the *spautolm* function in library *spatialreg*. The function takes a regression formula similar to *lm*, with a spatial weight matrix defined as an *nb2listw* object.  We will examine both first-order and second-order (neighbors of 1-first order neighbors).
+
+```{r}
+dat.areal_proj = st_transform(dat.areal, crs = "ESRI:102004")
+nb = poly2nb (dat.areal_proj)
+nb = nblag (nb, 2) #Create 2nd order and this makes nb into a list
+
+#2nd-order has about twice as many links
+nb[[1]]
+nb[[2]] 
+
+#Create adjacency matrix: 
+#Style B = binary for edges
+W = nb2listw(nb[[1]], style="B")
+W2 = nb2listw(nb[[2]], style="B") 
+
+## Standard linear regression
+Y = dat.areal$inc
+X = (dat.areal$Income-mean (dat.areal$Income))/1000 #center and scale to per $1,000
+fit0 = lm (Y~X)
+
+##Fit CAR model
+fit1.car = spautolm (Y~X, family = "CAR", listw = W)
+fit2.car = spautolm (Y~X, family = "CAR", listw = W2)
+```
+The summary from model fit gives similar outputs as with linear regression. The new parameter *lambda* corresponds to the CAR parameter. 
+
+```{r}
+summary (fit1.car)
+```
+
+# 4.2 Disease Mapping
+
+Instead of working with a continous rate (assumed Normal), next we will model the case count directly using Poisson regression. We will compare these to a naive analysis where we don't borrow information around neighboring counties. 
+
+```{r}
+Y = dat.areal$Case
+P = dat.areal$Population
+X = (dat.areal$Income-mean (dat.areal$Income))/1000 #center and scale to per $1,000
+
+#First define adjaceny matrix
+nb = poly2nb (dat.areal_proj)
+W = nb2mat (nb, style = "B")  #B = binary
+```
+
+The maximum likelihood estimate for the incidence rate is given by $Y_i/P_i$. We also calculate the standard error associated with $log (Y_i/P_i)$, which we will compare to estimates from spatial models.
+
+```{r}
+#MLE Estimates
+u.mle = Y/P
+se.mle = sqrt(Y)/P
+```
+
+We will use INLA here to perform Bayesian estimation. INLA is an efficient approach to conduct Bayesian analysis with hierarchical models when the latent variables (random effects) are Gaussian. Here we will assume the random effects are either iid (exchangeable) or follow have a spatial structure (i.e., besag or propor Leroux). Specific parametrization of these random effect distributions and priors for hyperparameters can be found here (https://inla.r-inla-download.org/r-inla.org/doc/latent/).
+
+```{r}
+#Some data wrangling first
+dat.areal$areal_ID = 1:nrow (dat.areal) #Create a county ID from 1 to 226
+
+#INLA needs a specific summary of adjacency structure
+nb2INLA ("adj.txt", nb) #write out a file
+G <- INLA::inla.read.graph(filename = "adj.txt") #read in to get INLA's graph format
+
+
+#Fit exchangeable (random effect model)
+#Note: "E" here is the offset and it does not need to be log-transofrmed
+fit.exch = inla (Cases~1+f(areal_ID), E= Population, family = "poisson", data = dat.areal,
+                 control.compute = list(dic = TRUE, waic = TRUE, return.marginals.predictor=TRUE))
+
+#Fit improper CAR model (besag)
+fit.iCAR = inla (Cases~1+f(areal_ID, model = "besag", graph = G), E= Population, family = "poisson", data = dat.areal,control.compute = list(dic = TRUE, waic = TRUE))
+
+#Fit proper CAR model (Leroux)
+fit.pCAR = inla (Cases~1+f(areal_ID, model = "besagproper2", graph = G), E= Population, family = "poisson", data = dat.areal,control.compute = list(dic = TRUE, waic = TRUE))
+
+#Fit BYM model (besag + idd)
+#Need to create another set of county IDs because we have two random effect distributions
+dat.areal$areal_ID_2 = 1:nrow (dat.areal) #Create a county ID from 1 to 226
+fit.conv = inla (Cases~1+f(areal_ID, model = "besag", graph = G) + 
+                   f(areal_ID_2), E= Population, family = "poisson", data = dat.areal,control.compute = list(dic = TRUE, waic = TRUE))
+
+#We can use summary to get a lot of model information.
+summary (fit.conv)
+
+#Get the fixed effects out
+fixed.eff = rbind (fit.exch$summary.fixed, fit.iCAR$summary.fixed, fit.pCAR$summary.fixed, fit.conv$summary.fixed)
+fixed.eff = data.frame (Model = c("Exch", "iCAR", "pCAR", "Conv"), round(fixed.eff, 2))
+fixed.eff
+
+#INLA reports precision = 1/variance. Let's convert them using the estimated posterior marginal distribution
+#First create a custom function
+prec_to_var = function (marg){ data.frame(inla.zmarginal(inla.tmarginal(function(x){(1/x)},marg), silent=TRUE))}
+
+var.est = rbind ( prec_to_var(fit.exch$marginals.hyperpar[[1]]), 
+                  prec_to_var(fit.iCAR$marginals.hyperpar[[1]]), 
+                  prec_to_var(fit.pCAR$marginals.hyperpar[[1]]),
+                  prec_to_var(fit.conv$marginals.hyperpar[[1]]),
+                  prec_to_var(fit.conv$marginals.hyperpar[[2]]))
+var.est = data.frame (Model = c("Exch", "iCAR", "pCAR", "Conv", "Conv"),
+                         Type = c("Sigma2", "Tau2", "Tau2", "Tau2", "Sigma2"), round(var.est, 2))
+var.est
+
+```
+
+Let's compared the estimated relative risks across models. We first collect estimates and their error from INLA models (scaled to per 10,000 people).
+
+```{r}
+
+## Extract estimates from each INLA model and scale to per 10,000 population
+dat.areal$rr.mle = u.mle*10000
+dat.areal$se.mle = se.mle*10000
+
+dat.areal$rr.exch = fit.exch$summary.fitted.values$mean*10000
+dat.areal$se.exch = fit.exch$summary.fitted.values$sd*10000
+
+dat.areal$rr.iCAR = fit.iCAR$summary.fitted.values$mean*10000
+dat.areal$se.iCAR = fit.iCAR$summary.fitted.values$sd*10000
+
+dat.areal$rr.conv = fit.conv$summary.fitted.values$mean*10000
+dat.areal$se.conv = fit.conv$summary.fitted.values$sd*10000
+```
+
+We see that the point estimates are pretty similar across models and they capture similar spatial patterns. 
+
+```{r}
+line01 <- function(x,y,...){abline(0,1, col = 4,lwd=2);  points(x,y,col=2)}
+plot(data.frame(MLE = dat.areal$rr.mle, Exchangeable = dat.areal$rr.exch, 
+                   iCAR = dat.areal$rr.iCAR, Convolution = dat.areal$rr.conv), panel=line01)
+
+plot.dat = data.frame (FIPS = dat.areal$FIPS,
+                  type =rep(c("MLE", "Exchangeable", "iCAR", "Convolution"), each = nrow (dat.areal)),
+                  rr = c(as.matrix(st_drop_geometry(dat.areal[,c("rr.mle", "rr.exch", "rr.iCAR", "rr.conv")]))))
+plot.dat$type = factor(plot.dat$type, levels = c("MLE", "Exchangeable", "iCAR", "Convolution"))
+plot.dat = merge (dat.areal, plot.dat, by = "FIPS")
+ggplot () + geom_sf (data = plot.dat, aes (fill = rr)) + facet_wrap(~type)+
+  scale_fill_gradient2(low = "white",high = "red", name = "Rate")
+```
+
+Let's just compare the convoluation model and the naive estimates. We see that the larger differences in county-specific relative risks are observed in counties with less cases and smaller population.
+The difference in precision (measured by the standard error of relative estimates) also depends on population and case number.
+
+```{r}
+par (mfrow=c(1,2))
+plot ( sqrt (Y), dat.areal$rr.mle - dat.areal$rr.conv,
+       ylab = "Differnece in RR", xlab = "SQRT (1/Cases)"); abline (0,0, col = "blue")
+plot ( log(P), dat.areal$rr.mle - dat.areal$rr.conv,
+       ylab = "Differnece in RR", xlab = "Ln (Population)"); abline (0,0, col = "blue")
+
+
+par (mfrow=c(1,2))
+plot ( sqrt (Y), dat.areal$se.mle - dat.areal$se.conv,
+       ylab = "Differnece in SE(RR)", xlab = "SQRT (1/Cases)"); abline (0,0, col = "blue")
+plot ( log(P), dat.areal$se.mle - dat.areal$se.conv,
+       ylab = "Differnece in SE(RR)", xlab = "Ln (Population)"); abline (0,0, col = "blue")
+```
+
+Finally, let's add household meduab income as a spatial covariate. We see that the spatial model gives a stronger negative association between income and chlamydia rates. The standard error is also much larger compared to a standard Poisson regression.
+
+```{r}
+dat.areal$Income_center = (dat.areal$Income-mean (dat.areal$Income))/1000
+fit = inla (Cases~Income_center+f(areal_ID, model = "besag", graph = G) + 
+                   f(areal_ID_2), E= Population, family = "poisson", data = dat.areal,control.compute = list(dic = TRUE, waic = TRUE))
+
+summary (fit)
+prec_to_var(fit$marginals.hyperpar[[1]])
+prec_to_var(fit$marginals.hyperpar[[2]])
+
+##Compare to other GLM
+dat.areal$logPop = log(dat.areal$Population)
+summary (glm (Cases~offset (logPop) + Income_center, family = "poisson", data = dat.areal))
+summary (glm (Cases~offset (logPop) + Income_center, family = "quasipoisson", data = dat.areal))
+
+#Examine random effects from the model
+dat.areal$gamma_est = fit$summary.random[[1]]$mean
+dat.areal$gamma_se = fit$summary.random[[1]]$sd
+dat.areal$theta_est = fit$summary.random[[2]]$mean
+dat.areal$theta_se = fit$summary.random[[2]]$sd
+
+ggplot () + geom_sf (data = dat.areal, aes (fill = gamma_est))+   theme_classic() + 
+  scale_fill_gradient2(low = "white",high = "red", name = "Gamma")+ggtitle("Spatial Random Effect Estimates")
+
+ggplot () + geom_sf (data = dat.areal, aes (fill = theta_est))+scale_fill_gradient2(low = "white",high = "red", name = "Theta")+
+    theme_classic() + ggtitle("Independent Random Effect Estimates")
+```
+

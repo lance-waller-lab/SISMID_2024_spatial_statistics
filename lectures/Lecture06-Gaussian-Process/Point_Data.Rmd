@@ -1,0 +1,278 @@
+---
+output: html_document
+---
+
+
+# SISMID Spatial Satistics
+# Data Lab 6 Modeling Point-Referenced Data
+***
+
+# 6.1 Data Wrangling and Visualization 
+
+Specify working directory and load R data file. 
+```{r}
+pacman::p_load(sf, #replaces "maptools", "rgdal" and other deprecated packages 
+               tmap, #helps with plotting your map
+               RColorBrewer, # creates nice color schemes
+               spgwr, # Adds the geographically weighted regression functions
+               here, # For constructing filepaths relative to root directory
+               geoR
+               )
+load ("data/dat_krig.RData")
+```
+
+***
+This time we have 2 data sets. First, *dat* contains the observed PM2.5 concentrations at 78 sites on a particularly day. We also have 4 spatial predictors: elevation, percent forest cover, highway len gth, d simulate PM2.5 level from a numerical model (The Community Multiscale Air Qualianty Modeling System, CMAQ). The predictors present values linked to a 12km x 12km grid cell that contains the monitor. 
+```{r}
+str (dat)
+```
+The second data set, *dat.pred* contains information for prediction at 2,400 locations. The data set has the same structure but does not contain the variable *pm*. 
+```{r}
+str (dat.pred)
+```
+
+We will first create *sf* objects and visualize the datasets. 
+
+```{r, warning = F}
+library (sf)
+library (ggplot2)
+library (maps)
+library (cowplot)
+
+dat = st_as_sf(dat, coords = c("pm_lon","pm_lat"))
+dat.pred = st_as_sf(dat.pred, coords = c("Lon","Lat"))
+dat = st_set_crs(dat, 4979) #Set datum to WGS 84
+dat.pred = st_set_crs(dat.pred, 4979) 
+
+#Create overlay state map
+#Convert from map object to sf and keep only boundary lines
+state.map = map ("state", region = c("alabama", "georgia", "south carolina", "north carolina", "tennessee"),fill = T,  plot = F)
+state.map =  st_boundary(sf::st_as_sf(state.map))
+state.map = st_crop(state.map, xmin = -89, xmax = -80, ymin = 30, ymax = 36.7)
+
+#Visualize observed PM2.5 values at 78 locations
+ggplot() + geom_sf (data = state.map)+
+  geom_sf(aes(color=pm), size = 1.5, data=dat)+
+  scale_color_gradient(low = "blue",high = "orange")
+
+#Visualize covariate values at 2,400 prediction locations
+p1 = ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=elevation), size = 1.5, shape=15, data=dat.pred) +
+  scale_color_gradient(low = "white",high = "grey")+ggtitle("Elevation (m)")
+p2 = ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=forestcover), size = 1.5, shape=15, data=dat.pred) +
+  scale_color_gradient(low = "white",high = "green")+ggtitle("Percent Forestcover (%)")
+p3 = ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=hwy.length), size = 1.5, shape=15, data=dat.pred) +
+  scale_color_gradient(low = "white",high = "blue")+ggtitle("Total Highway Length (m)")
+p4 = ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=cmaq), size = 1.5, shape=15, data=dat.pred) +
+  scale_color_gradient(low = "blue",high = "orange")+ggtitle("Simulated PM2.5")
+plot_grid (p1, p2, p3, p4)
+```
+
+# 6.2 Estimating Covariance Function Parameters 
+
+If we are willing to work under a parametric framework, assuming the outcome is Gaussian, then one approach is to use the likelihood to estimate **both** the regression coefficients and the covariance function parameters simultaneously. Likelihood-based methods, MLE or REML, are implemented using *likfit*. Here we use REML that also accounts for the fact that MLE estimates of variance parameters are slightly biased. 
+
+We need to specify:
+
+* covariance model (cov.model = )
+* initial values (ini.cov.pars = )
+* estimation procedure (lik.method = "ML" or "REML")
+* spatial covariate (trend = ~ X1 + X2 + ... )
+
+We will restrict this analysis to the Gaussian (squared exponential) covariance function. Other commonly used options are exponential and Matern (with a specified smoothness, kappa parameter). 
+
+It's good to give initial values to avoid convergence problems. We will usually try different initial values or estimate from variogram analysis (not covered here). Remember to project lat-lon coordinates to (x,y) in order to use Euclidean distances in the covariance function.   
+
+```{r}
+
+library (geoR)
+
+#Project and convert from meters to km
+dat.proj = st_transform(dat, crs = "ESRI:102004")
+locs = as.matrix(st_coordinates(dat.proj)/1000) 
+
+#Gaussian Cov Fnc (no trend)
+fit0 = likfit (coord=locs, data = dat$pm, cov.model = "gaussian",
+               ini.cov.pars=c(15,  100), lik.met = "REML", message = F)
+
+#Gaussian Cov Fnc (with CMAQ as predictor)
+fit = likfit (coord=locs, data = dat$pm, cov.model = "gaussian", 
+               ini.cov.pars=c(15,  200),trend = (~dat$cmaq), lik.met = "REML", message = F )
+```
+
+With estimated parameter values, we can calculate the standard error of the fixed effects (see lecture). Let's also examine how correlation decays as a function of distance from our estimated covariance function. One common statistic to measure how the correlation drops is the *effective range* defined as the distance where correlation is 0.05.  
+
+```{r}
+## This function will take in a cov function, and return betas and their standard error
+myfunc = function (X, Y, d.mat, model){
+  nugget = model$nugget
+  range = model$cov.pars[2]
+  partial_sill = model$cov.pars[1]
+  C = partial_sill*exp (-d.mat^2/(range^2))+nugget*diag(length(Y))
+  beta.i = solve(t(X)%*%solve(C)%*%X)%*% t(X)%*%solve(C)%*%Y
+  sd.i = sqrt (diag(solve(t(X)%*%solve(C)%*%X)))
+  cbind (beta.i, sd.i)
+}
+
+d.mat = as.matrix(dist (locs)) #Distance matrix
+myfunc (X = cbind (1, dat$cmaq), Y = dat$pm, d.mat, fit0)
+myfunc (X = matrix(rep(1,nrow(dat))), Y = dat$pm, d.mat, fit)
+
+##Correlation-distance plot
+d = seq (0, 500, by = 5)
+corr_dist = exp (-d^2/(fit$cov.pars[2]^2))
+plot (corr_dist~d, type = "l", xlab = "Distance",  ylab = "Correlation", lwd = 4)
+abline (v = sqrt (-log(0.05))*fit$cov.pars[2], col = 2, lty = 2, lwd = 2)
+abline (h = 0.05)
+```
+
+# 6.3 Kriging Prediction
+
+Next, we will use geoR's *krige.cov* function to perform prediction.The following inputs are needed:
+* locations for the observations (projected to x-y!)
+* outcome data (observations to be "conditioned" on)
+* locations for the predictions (projected to x-y!)
+* full specification of the covariance function (estimated from previous model fits)
+
+We specify method = "OK" (ordinary kriging) to allow for covariates in the trend model. 
+
+```{r}
+
+#Project the prediction locations
+dat.pred.proj = st_transform(dat.pred, crs = "ESRI:102004")
+locs.pred = as.matrix(st_coordinates(dat.pred.proj)/1000) 
+
+#No predictor kriging
+fit_krig0 = krige.conv (coords = locs, data = dat$pm, 
+                       locations = locs.pred,
+                       krige=krige.control (type.krige="OK", 
+                                            cov.model ="gaussian", cov.pars = c(18.9, 204), nugget = 15.6  ) )
+
+#Kriging with covariate (CMAQ)
+fit_krig = krige.conv (coords = locs, data = dat$pm, 
+                       locations = locs.pred, 
+                       krige=krige.control (type.krige="OK",
+                                            trend.d=trend.spatial(~cmaq, dat), trend.l=trend.spatial(~cmaq, dat.pred),	cov.model ="gaussian",cov.pars = c(16.4, 179), nugget = 13.4  ) )
+``` 
+
+Predictions and their variance can be extracted from the fitted object. We see that without covariate the predicted surface is very smooth with high/low prediction values in regions with similar observed values. 
+
+```{r}
+#Here is a list of values
+names (fit_krig)
+
+#Put predictions and error in a nice dataframe
+pred.results = data.frame (
+  Est_fit0 = fit_krig0$predict,
+  SE_fit0 = sqrt(fit_krig0$krige.var),
+  Est_fit = fit_krig$predict,
+  SE_fit = sqrt(fit_krig$krige.var))
+
+#Make various prediction plots
+ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=pred.results$Est_fit0), size = 3, shape=15, data=dat.pred) +  scale_color_gradient(low = "blue",high = "orange")+ggtitle("Simple Kriging")+labs(color = "PM2.5 Level")
+
+ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=pred.results$Est_fit), size = 3, shape=15, data=dat.pred) +  scale_color_gradient(low = "blue",high = "orange")+ggtitle("Kriging + Covariate")+labs(color = "PM2.5 Level")
+
+u = as.matrix(st_coordinates(dat)) #Add observation locations
+ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=pred.results$SE_fit), size = 3, shape=15, data=dat.pred) +  scale_color_gradient(low = "yellow",high = "red")+ggtitle("Prediction Standard Error")+labs(color = "SE")+geom_point(aes(u[,1], u[,2]), color = "blue", size = 2, shape =17)+ theme(axis.title.x=element_blank(),axis.title.y=element_blank())
+
+#Decompose trend and spatial process
+pred.results$Fixed = cbind (1, dat.pred$cmaq)%*%fit_krig$beta.est
+pred.results$Smooth= pred.results$Est_fit0 - pred.results$Fixed
+
+ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=pred.results$Fixed), size = 3, shape=15, data=dat.pred) +
+  scale_color_gradient(low = "blue",high = "orange")+ggtitle("Fixed Effect Component")+labs(color = "PM2.5 Level")
+
+ggplot()  + geom_sf (data = state.map) +
+  geom_sf(aes(color=pred.results$Smooth), size = 3, shape=15, data=dat.pred) +
+  scale_color_gradient(low = "blue",high = "orange")+ggtitle("Spatial Component")+labs(color = "PM2.5 Level")+geom_point(aes(u[,1], u[,2]), color = "red", size = 2, shape =17)+ theme(axis.title.x=element_blank(),axis.title.y=element_blank())
+
+```
+
+# 6.4 Bayesian Kriging
+
+geoR also support Bayesian kriging. There are a lot more arguments associated with estimation that one can specify. For some prior distributions, additional parameters (i.e. hyper-parameters) need to be specified. Also note that discretized or fixed values of $\phi$ is needed always. 
+
+Given our previous analyses, we set the priors for spatial range and partial sill to cover a wide range of possible values (with a uniform distribution).
+
+Background and mathematical details can be found here: http://www.leg.ufpr.br/geoR/geoRdoc/bayeskrige.pdf
+
+
+```{r}
+fit_bayes = krige.bayes (coords = locs, data = dat$pm, 
+                   model=model.control (trend.d=~1+dat$cmaq, cov.model="gaussian"), 
+                   prior = prior.control(phi.prior = "uniform", phi.discrete=seq(1, 1000, by = 5), 
+                                         tausq.rel.discrete = seq(0.1, 10, by = 0.1), 
+                                         tausq.rel.prior=c("uniform")), 
+                   output = output.control(n.posterior = 5000, messages = FALSE) )
+```
+
+The function has several built in visualization to examine results. 
+
+```{r}
+##Histograms
+par (mfrow = c(2,3))
+hist (fit_bayes)
+
+#Plot posterior versus prior distributions of the covariance parameters
+par (mfrow = c(1,2))
+plot(fit_bayes, type="h", col=c("red", "blue"))
+```
+
+We will also extract the posterior samples to calculate point and interval estimates. Recall that Bayesian inference via Markov chain Monte Carlo (MCMC) gives samples from the posterior distributions. We will use these samples for each parameter to calculate mean (point estimate) and interval (e.g., 2.5th and 97.5th quantiles). 
+
+```{r}
+#Extract posterior samples
+#This is matrix with num of rows = number of posterior samples
+post.samp = fit_bayes$posterior$sample 
+
+#The column names are informative about the parameters
+names (post.samp)
+
+#Because the model works with tau2/sigma2, we need to mannualy recover samples of tau2
+post.samp$tau2 = post.samp$tausq.rel * post.samp$sigmasq
+
+#Calculate posterior summary statistics and put ina nice table
+Results = cbind (apply(post.samp,2,mean), apply(post.samp,2, median), apply (post.samp, 2, sd), apply (post.samp, 2, quantile, 0.025), apply(post.samp, 2, quantile, 0.975))
+Results = as.data.frame (round(Results,2))
+names (Results) = c("Mean", "Median", "SD", "2.5% Quantile", "97.5 Quantile")
+Results
+```
+
+
+Let's now examine the predictions at 2 locations: far (the first row) and close (the 34th row). This will take some time to fit! 
+
+```{r}
+
+#Makes prediction only at 2 locations (row #1 and #820)
+use.pred = c(1,820)
+
+fit_bayes_pred = krige.bayes (coords = locs, data = dat$pm, 
+                              locations = locs.pred[use.pred,],
+                   model=model.control (trend.d=~1+dat$cmaq, cov.model="gaussian",
+                                        trend.l=~1+dat.pred$cmaq[use.pred]), 
+                   prior = prior.control(phi.prior = "uniform", phi.discrete=seq(1, 1000, by = 5), 
+                                         tausq.rel.discrete = seq(0.1, 10, by = 0.1), 
+                                         tausq.rel.prior=c("uniform")), 
+                   output = output.control(n.posterior = 5000, messages = FALSE) )
+
+post.samp = t(fit_bayes_pred$predictive$simulations)
+
+#By default krige.bayes gives the posterior samples of the spatial process. To get prediction of Y, we will need to add in the nugget. We first extract the posterior samples of sigma^2. Then generate a residual error for each sigma^2 and add it to the corresponding posterior predictive sample. 
+post.nugget = fit_bayes_pred$posterior$sample$sigmasq 
+post.samp[,1] = post.samp[,1] + rnorm (length (post.nugget), 0, sqrt(post.nugget))
+post.samp[,2] = post.samp[,2] + rnorm (length (post.nugget), 0, sqrt(post.nugget))
+
+##Calculate posterior mean, standard deviation, and 95% interval from Bayesian kriging
+apply (post.samp, 2, mean)
+apply (post.samp, 2, sd)
+apply (post.samp, 2, quantile, c(0.025, 0.975))
+
+```

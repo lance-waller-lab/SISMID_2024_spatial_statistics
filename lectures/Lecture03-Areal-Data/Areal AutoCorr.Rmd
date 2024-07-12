@@ -1,0 +1,347 @@
+---
+output: html_document
+---
+
+
+# SISMID Spatial Satistics
+# Data Lab 3 Working with Areal Data 
+***
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+# 3.1 Working with Spatial Polygons
+
+We will first load a standard data frame consisting of several county-level variables: 
+
+* FIPS: 5-digit unique code for county
+* Area: full name of the county
+* State: Alabama or Georgia
+* Population: total population in 2007
+* Cases: # of chlamydia cases in 2000
+* Income: median household income from Census 2000
+* inc: chlamydia incidence per 10,000 population
+
+```{r}
+pacman::p_load(sf, #replaces "maptools", "rgdal" and other deprecated packages 
+               tmap, #helps with plotting your map
+               RColorBrewer, # creates nice color schemes
+               maps, 
+               stringr,
+               colorRamps, 
+               ggplot2, 
+               spdep, 
+               DCluster,
+               spgwr, # Adds the geographically weighted regression functions
+               here # For constructing filepaths relative to root directory
+               )
+load ( here("data", "Data.RData") )
+summary (dat)
+```
+
+Next, we will read in county spatial polygons for the contiguous US in the *maps* package. R can also read in any shapefile via the *sf* package. The *st_as_sf* function converts the map object to an *sf* object, which encodes the ID, polygons, and any unit-specific data value.
+
+```{r, warning=FALSE}
+county.map = map ("county", region = c("alabama", "georgia"),fill = T,  plot = F)
+county.map = sf::st_as_sf(county.map) #Convert from map object to sf
+
+plot (st_geometry(county.map)) #only plot the polygons
+```
+
+Our sf object contains several attributes:
+
+* $ID = county identifier string
+* $geom:sfc_MULTIPOLYGON = sets of polygons (n = 226)
+
+```{r}
+str (county.map)
+attributes (county.map)
+```
+Let's look at some meta data information:
+
+* In GIS terminology, each polygon is called a feature.
+* Dimension: XY means the feature is 2-dimensional 
+* Bounding box: the max/min used for plotting
+* Geodetic CRS: the projection/datum
+
+```{r}
+print (county.map, n = 2)
+```
+There are several ways we can extract information from an sf object. 
+
+```{r}
+
+#Extract the first polygon and make a plot
+poly1 = st_geometry (county.map)[[1]]
+
+#Print all the points used to draw the polygon
+poly1
+
+plot (poly1)
+```
+
+Our first data task is to merge the dataset with the sf object. In our case, the counties are ordered by row exactly the same for the two datasets and we can use *cbind*. In general, it's good to merge by polygon ID. 
+
+```{r}
+
+#Option 1
+dat.areal = cbind (county.map, dat)
+dat.areal[1:3,]
+
+#Option 2
+
+data (county.fips) #Load county 5-digit FIPS code
+county.map$FIPS = county.fips$fips[ match (county.map$ID, county.fips$polyname)]
+county.map$FIPS =  str_pad (county.map$FIPS, 5, "left", "0")
+all (county.map$FIPS %in% dat$FIPS) 
+dat.areal2 = merge (county.map, dat, by = "FIPS")
+```
+
+The object *dat.areal*$* now contains the polygon information and the dataframe we would like to. We can do standard operations on the dataframe now. We can also create chloropleth map!
+
+```{r}
+dim (dat.areal)
+names(dat.areal)
+
+
+plot (dat.areal["Income"], main = "Median Household Income in 2000")
+plot (dat.areal["inc"],  main = "Chlamydia Incidence (per 10,000) in 2007")
+```
+
+Or use ggplot. 
+
+```{r}
+ggplot() + geom_sf (data = dat.areal, aes (fill = Income))+
+  labs(title="Median Household Income in 2000")   +scale_fill_gradient2(low = "white",high = "red", limits = c(0, 80000))
+
+ggplot() +  geom_sf (data = dat.areal, aes (fill = inc))+
+  labs(title="Chlamydia Incidence (per 10,000)")  +scale_fill_gradient2(low = "white",high = "blue", limits = c(0, 140))
+
+```
+
+# 3.2 Defining Spatial Proximity
+
+The package *spdep ()* contains a suite of functions for working with areal spatial data. The *poly2nb ()* function identifies neighbours using a spatial polygons. Neighbours are defined as sharing a common boundary point.The default in poly2nb uses the queen's case definition that is two polygons are neighbours even if they share a single boundary. This can be suppressed by the *queen = * option. 
+
+
+```{r, warning = FALSE}
+#Because our shapefile here is un-projected, distance operations can be difficult. Alternatively, we can project the data to, for example, the Lambert Conformal Conic North America.
+dat.areal_proj = st_transform(dat.areal, crs = "ESRI:102004")
+plot (st_geometry(dat.areal_proj))
+nb = poly2nb (dat.areal_proj)
+nb2 = poly2nb (dat.areal_proj, queen=FALSE)
+
+#A lot of good summaries about the neighbor structure
+summary (nb)
+```
+
+The function *nb2mat ()* then creats a proximity/weight matrix using the neighbourhood information. Here we have several options to define weights:
+ 
+ * B: basic binary
+ * W: row standardized (sum of all entries = n)
+ 
+```{r}
+W = nb2mat (nb, style = "B") 
+center_proj = st_centroid(dat.areal_proj) ##Extract centroids of polygons
+center = st_transform(center_proj, crs = 4326) #Re-project back to WGS 84
+center = st_coordinates (center)                 
+
+plot (st_geometry(dat.areal))
+plot (nb, center, add = TRUE, col = "blue")
+plot (nb2, center, add = TRUE, col = "red", lwd = 1)
+title (main="Blue lines = additional neighbours by queen's case")
+
+## Using kth-nearest distance
+nb.k1 = knn2nb (knearneigh(center_proj,k=1))
+nb.k2 = knn2nb (knearneigh(center_proj,k=2), row.names=row.names(center))
+
+plot (st_geometry(dat.areal))
+plot (nb.k2, center, add = TRUE, col = "red", lwd = 1)
+plot (nb.k1, center, add = TRUE, col = "blue", lwd = 1)
+title (main="Blue lines = additional second nearest-neighbour")
+
+## Using buffer distance
+nb.buffer1 = dnearneigh(center_proj, d1=0, d2 = 25*1000)
+nb.buffer2 = dnearneigh(center_proj, d1=0, d2 = 40*1000)
+
+plot (st_geometry(dat.areal))
+plot (nb.buffer2, center, add = TRUE, col = "red", lwd = 1)
+plot (nb.buffer1, center, add = TRUE, col = "blue", lwd =2)
+legend ("topright", legend =c("<25 km", "< 40 km"), col= c("blue", "red"), pch = 16)
+```
+
+# 3.3 Spatial Lag Regression
+
+Let's first produce a Moran Plot. We first show how to do it by hand. The *moran.plot ()* function in *spdep* will also identify high influence points. 
+
+```{r}
+Y = dat.areal$Income
+
+nb = poly2nb (dat.areal_proj)
+W = nb2mat (nb, style = "W") 
+
+WY = W%*%Y
+plot (WY~Y, col = 4, ylab = "Spatially Lagged Wegithed Income", xlab = "Income", cex.lab = 1.4, cex.axis = 1.2, cex = 1.2)
+abline (h = mean (WY), lty = 2); abline(v=mean(Y), lty=2)
+abline(0,1)
+
+#Here we need to use the weighted adjancy matrix (defult in *nb2listw*)
+moran.plot (Y, nb2listw(nb))
+```
+
+Calculate Moran's I by hand and perform asymptotic hypothesis test. 
+
+```{r}
+ybar = mean (Y)
+r = Y - ybar
+I = sum(r%*% t(r)*W)/ sum (r^2)*nrow(W)/sum(W)
+I
+
+#Note that the Moran's statistic is the same as the slope from the previous regression model
+coef (lm (WY~Y))
+
+#The default performs non-Gaussian test under randomization
+col.W <- nb2listw(nb, style="W")
+moran.test (Y, col.W)
+
+#Assume Y is Gaussian
+moran.test (Y, col.W, randomisation = FALSE)
+```
+
+
+Moran's I hypothesis test by permutation
+```{r}
+I.perm = moran.mc (Y, col.W, 10000)
+I.perm
+
+hist (I.perm$res, main = "Moran's I under Null Hypothesis", xlab = "", ylab ="")
+abline (v = 0.567, col = 2, lwd = 4)
+text (0.5, 20000, "Observed \n Moran's I", col = 2)
+```
+
+Geary's C
+
+```{r}
+
+##Geary's C
+geary.test (Y, col.W)
+
+C.perm = geary.mc (Y, col.W, 10000)
+hist (C.perm$res, main = "Geary's C under Null Hypothesis", xlab = "", ylab ="")
+abline (v = 0.4295, col = 2, lwd = 4)
+text (0.5, 15000, "Observed \n Geary's C", col = 2)
+```
+# 3.4 Local Moran's I
+
+To estimate local Moran's I for chlaymia incidence rate, we need a first-order adjacency matrix W. The *localmoran ()* results gives:
+
+* Ii = local Moran's I statistic
+* E.Ii = expected value under H_0 (i.e. no clustering)
+* Var.Ii = asymptotic variance under H_0
+* Z.Ii = asymptotic test-statistic
+* Pr(Z>0) = one-sided p-value under asymptotic normality
+
+```{r, warning=FALSE}
+Y = dat.areal$inc
+col.W <- nb2listw(nb, style="B")
+
+I.local = localmoran (Y, col.W)
+I.local[1:4,]
+
+```
+
+Next, we extract the local Moran's I results and include them in our spatial dataframe.
+
+```{r}
+dat.areal$I.local = I.local[,1]
+I.local.p = I.local[,5] 
+I.local.p_bonf = p.adjust (I.local[,5], method ="bonferroni")
+I.local.p_holm = p.adjust (I.local[,5], method ="holm")
+I.local.p_fdr = p.adjust (I.local[,5], method ="fdr")
+
+plot.dat = data.frame (FIPS = dat.areal$FIPS,
+                  type =rep(c("Raw", "Bonferroni", "Holm", "FDR"), each = length (I.local.p)),
+                  p = c(I.local.p, I.local.p_bonf, I.local.p_holm, I.local.p_fdr))
+plot.dat$p=as.factor(cut(plot.dat$p, c(0,0.01, 0.05, 1), right=TRUE ))
+levels (plot.dat$p) = c("<0.01", "0.01-0.05", ">0.05")
+plot.dat$type = factor(plot.dat$type, levels = c("Raw", "Bonferroni", "Holm", "FDR"))
+
+plot.dat = merge (dat.areal, plot.dat, by = "FIPS")
+
+ggplot () + geom_sf (data = plot.dat, aes (fill = p)) + theme_classic() + facet_wrap(~type)+  scale_fill_discrete(name = "p-value")
+
+```
+
+To avoid relying on asymptotic normality, we can also perform a permutation test. Here we re-sample the incidence data with replacement 10,000 times. Each time, we calculate the local Moran's I statistics. First, note that under *H_0* of no spatial dependence, the local Moran's I statistics exhibit large skewness compared to a normal distribution. 
+
+
+```{r}
+#Number of permutation
+n.iter = 10000 
+
+#Row = 226 counties, column = permutation
+I.keep = matrix (NA, ncol = n.iter, nrow = length (Y))
+Y = dat.areal$inc
+
+for (i in 1:n.iter){ 
+  if (i %% 1000 ==0){print (i)}
+  I.keep[,i] <- localmoran (sample (Y, length(Y), replace=T), col.W)[,1]
+}
+
+#Check the normality for local Moran's I for county 1 and county 20
+par (mfrow = c(1,2))
+qqnorm(I.keep[1,], main = "Moran's I (Null Distribution)\n County ID = 1");qqline(I.keep[1,])
+qqnorm(I.keep[20,], main = "Moran's I (Null Distribution)\n County ID = 20");qqline(I.keep[20,])
+
+I.obs = localmoran (Y, col.W)[,1]
+
+#Calculate P(Local Moran's I > observed | Null)  
+P_perm = apply ( sweep (I.keep, 1, I.obs, ">" ), 1, mean) 
+P_perm[P_perm==0] = 1/n.iter
+
+dat.areal$MoranI_perm_p= cut(p.adjust(P_perm, "bonferroni"), c(0,0.01, 0.05, 1) )
+levels (dat.areal$MoranI_perm_p) = c("<0.01", "0.01-0.05", ">0.05")
+
+
+ggplot () + geom_sf (data = dat.areal, aes (fill = MoranI_perm_p)) + theme_classic()+
+  ggtitle("Permutation-based Bonferroni-corrected") + scale_fill_discrete(name = "p-value")
+```
+
+# 3.5 Global Model-Based Cluster Detection
+
+We will now focus on performing cluster detection specifically for case incidence data. We will use functions in the R package *DCluster*. These functions often require the input as a dataset with two variable names: Observed and Expected. 
+First, we perform tests to see if spatial clustering exists. 
+
+```{r}
+dismap = data.frame (Observed = dat.areal$Cases, Pop = dat.areal$Population)
+theta_0 = sum(dismap$Observed)/sum(dismap$Pop)
+dismap$Expected = dismap$Pop * theta_0
+
+################
+#   Chi2 test  #
+################
+#Asymptotic test
+achisq.stat (dismap)
+
+#Simulation-based
+achisq.test(Observed~offset(log(Expected)), data = dismap, model = "poisson", R=1000)
+achisq.test(Observed~offset(log(Expected)), data = dismap, model = "multinom", R=1000)
+achisq.test(Observed~offset(log(Expected)), data = dismap, model = "negbin", R=1000)
+
+##############################
+# Potthoff-Whittinghill test #
+##############################
+pottwhitt.test(Observed~offset(log(Expected)), data = dismap, model = "poisson", R=1000)
+pottwhitt.test(Observed~offset(log(Expected)), data = dismap, model = "multinom", R=1000)
+
+###############
+#  Moran's I  #
+###############
+nb = poly2nb (dat.areal_proj)
+col.W = nb2listw(nb)
+moranI.test (Observed~offset(log(Expected)), data = dismap, model = "poisson", R=1000, listw = col.W, n = nrow(dismap), S0 = Szero(col.W))
+
+```
