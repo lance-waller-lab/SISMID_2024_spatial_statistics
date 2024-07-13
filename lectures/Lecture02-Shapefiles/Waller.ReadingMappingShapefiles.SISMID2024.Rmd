@@ -91,16 +91,17 @@ houston = st_read(dsn = here("data"),layer = "HoustonENAR2012final")
 
 ## Plotting the map
 
--   To get the outlines simply plot our 'houston' data object.
+-   If we plot the 'houston' shapefile, the plot command will plot maps of each of the attributes.  If we want one houston map, we can do this by plotting, say, POP2000 but assign the same color to every tract with a value (I use grey here, so we can see that there are some tracts with no attribution values...these are independent municipalities within Houston).
+
+To get the specific attribute POP2000 from the spatial data object houston, we refer to houston['POP2000']
 
 
 ```{r}
-plot(houston)
+plot(houston['POP2000'],col=adjustcolor("grey", alpha=0.5))
 ```
 
 
-Next, we want to make choropleth maps (shading in each tract based on it
-attribute value).
+Next, we want to make choropleth maps (shading in each tract based on its associated attribute value).
 
 To do this, we need to decide how many intervals (colors) we want. I
 like odd numbers so there is a 'middle' color, and I usually start with
@@ -116,7 +117,7 @@ and checking the ColorBrewer webpage (<https://colorbrewer2.org/>)
 ```{r}
 
 # Plot the outlines (we'll add color below)
-plot(houston)
+#plot(houston)
 
 # Define the variable (attribute) to shade tracts by
 pop2000 <- houston$POP2000
@@ -129,11 +130,10 @@ plotclr <- brewer.pal(nclr,"BuPu")
 class <- classInt::classIntervals(pop2000, nclr, style="quantile")
 colcode <- classInt::findColours(class, plotclr)
 
-#Fill in the tracts with the colors
-plot(houston['POP2000'])
-#Add a title
-title(main="Population 2000",
+#Fill in the tracts with the colors, 'main' and 'sub' define the titles.
+plot(houston['POP2000'],col=colcode,main="Population 2000",
       sub="Quantile (Equal-Frequency) Class Intervals")
+
 ```
 
 OK, great, we can map the data. Let's map the main variables for our
@@ -157,14 +157,16 @@ summary(houston$violence_2)
 summary(houston$tot_pop)
 
 # Covariate 1 (log standardized total alcohol sales)
-hist(houston$Zl_total)
+hist(houston$Zl_total, main="Standardize alcohol sales",
+     xlab="Standardized illegal drug arrests")
 # Covariate 2 (log standardized illegal drug arrests)
-hist(houston$Zl_drug)
+hist(houston$Zl_drug, main="Standardized illegal drug arrests",
+     xlab="Standardized illegal drug arrests")
 ```
 
 ------------------------------------------------------------------------
 
-Now to map the outcome. 
+Now to map the outcome, using tm_shape and tm_fill
 
 ```{r}
 violence_map <- tm_shape(houston) + 
@@ -177,7 +179,8 @@ title='Violent Crimes \n Per Capita') +
              position=c('RIGHT', 'BOTTOM')) + 
   tm_layout(main.title="Violent Crime Rate in Houston, TX",
             inner.margins = c(0.1, 0.1, 0.05, 0.05), 
-            main.title.size=1.2, legend.title.size=0.8)
+            main.title.size=1.2, legend.title.size=0.5,  
+            legend.text.size=0.5)
 violence_map
 ```
 
@@ -196,7 +199,8 @@ title='Standardized Log \n Total Alcohol Sales') + # "\n" moves text to the next
              position=c('RIGHT', 'BOTTOM')) + 
   tm_layout(main.title="Alcohol Sales in Houston, TX",
             inner.margins = c(0.1, 0.1, 0.05, 0.05), 
-            main.title.size=1.2, legend.title.size=0.8)
+            main.title.size=1.2, legend.title.size=0.5,  
+            legend.text.size=0.5)
 alc_map
 ```
 
@@ -215,7 +219,8 @@ title='Standardized Log \n Illegal Drug Arrests') +
              position=c('RIGHT', 'BOTTOM')) + 
   tm_layout(main.title="Illegal Drug Arrests in Houston, TX",
             inner.margins = c(0.1, 0.1, 0.05, 0.05), 
-            main.title.size=1.2, legend.title.size=0.8)
+            main.title.size=1.2, legend.title.size=0.5,  
+            legend.text.size=0.5)
 drug_map
 
 ```
@@ -229,6 +234,8 @@ Waller LA, Zhu L, Gotway CA, Gorman DM, and Gruenewald PJ (2007)
 distribution and violence: A comparison of geographically weighted
 regression and spatially varying coefficient models". Stochastic
 Environmental Research and Risk Assessment.21, 573-588.
+
+Let's use tmap to make a multiple-map single figure.
 
 ```{r}
 tmap_arrange(violence_map, alc_map, drug_map)
