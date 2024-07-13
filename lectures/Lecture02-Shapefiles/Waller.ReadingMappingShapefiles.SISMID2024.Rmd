@@ -166,7 +166,7 @@ hist(houston$Zl_drug, main="Standardized illegal drug arrests",
 
 ------------------------------------------------------------------------
 
-Now to map the outcome, using tm_shape and tm_fill
+Now to map the outcome, using the mapping package tmap's routines tm_shape and tm_fill.  tmap builds the maps as objects making it easier to customize parts of the map (legents, credits, and the layout) and to build multi-map figures (see below).
 
 ```{r}
 violence_map <- tm_shape(houston) + 
