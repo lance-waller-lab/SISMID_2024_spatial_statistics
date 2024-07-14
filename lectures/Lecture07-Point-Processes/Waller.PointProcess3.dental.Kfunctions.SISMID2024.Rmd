@@ -472,7 +472,7 @@ legend(0,800,legend=c("min,max",
 			  "2.5th, 97.5th percentiles",
 			  "median"), 
 			  col=1,
-   		          lty=c(2,3,4),lwd=c(2,2,2),cex=1.2)
+   		          lty=c(2,3,4),lwd=c(2,2,2),cex=0.8)
 
 title("L plot, affected gravesites, random labeling",cex.main=1.5)
 #dev.off()
