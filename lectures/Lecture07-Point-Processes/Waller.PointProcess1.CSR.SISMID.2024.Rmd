@@ -256,7 +256,8 @@ gives the nearest neighbor distance!  Now we just need it for all values.  Let's
 
 ```{r }
 ###################
-# Set a vector of zeros with length equal to the number of locations in myrtles.all (length(myrtles.all$x)).
+# Set a vector of zeros with length equal to the number of 
+# locations in myrtles.all (length(myrtles.all$x)).
 
 mindist.all <- 0*(1:length(myrtles.all$x))
 
@@ -366,8 +367,9 @@ print(paste("Peilou's statistic: ",round(pielou.all,4)," p-val = ",round(p.val,4
 mindist.healthy = 0*(1:length(myrtles.healthy$x))
 
 for (i in 1:length(myrtles.healthy$x)) {
-  dist = sqrt( (myrtles.healthy$x[i] - myrtles.healthy$x)^2 + (myrtles.healthy$y[i] - myrtles.healthy$y)^2 )
-  mindist.healthy[i] = min(dist[dist!=0])
+  dist = sqrt( (myrtles.healthy$x[i] - myrtles.healthy$x)^2 + 
+                 (myrtles.healthy$y[i] - myrtles.healthy$y)^2 )
+                  mindist.healthy[i] = min(dist[dist!=0])
 }
 
 n.healthy = length(myrtles.healthy$x)
@@ -386,8 +388,9 @@ Now for the diseased trees
 mindist.diseased = 0*(1:length(myrtles.diseased$x))
 
 for (i in 1:length(myrtles.diseased$x)) {
-  dist = sqrt( (myrtles.diseased$x[i] - myrtles.diseased$x)^2 + (myrtles.diseased$y[i] - myrtles.diseased$y)^2 )
-  mindist.diseased[i] = min(dist[dist!=0])
+  dist = sqrt( (myrtles.diseased$x[i] - myrtles.diseased$x)^2 + 
+                 (myrtles.diseased$y[i] - myrtles.diseased$y)^2 )
+                   mindist.diseased[i] = min(dist[dist!=0])
 }
 
 
