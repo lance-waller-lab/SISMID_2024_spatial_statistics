@@ -172,7 +172,8 @@ Now we'll calculate the relative risk surface by finding the ratio of the densit
 ########################################################
 # Kelsall and Diggle's ratio of intensity surfaces using KernSmooth
 
-# Define the relative risk surface as the point-by-point ratio of case density to control density
+# Define the relative risk surface as the 
+# point-by-point ratio of case density to control density
 r.ks <- log(casdens$fhat/condens$fhat)
 # set any 'divide by zero' problems to 'NA'
 r.ks[!is.finite(r.ks)] <- NA
@@ -202,7 +203,8 @@ Now to plot the relative risk surface.
     par(mfrow=c(1,2),pty="s")
 
 
-    persp(casdens$x1,casdens$x2,r.ks,theta=-25,phi=45,xlab="u",ylab="v",zlab="log relative risk",zlim=c(-3,3))
+    persp(casdens$x1,casdens$x2,r.ks,theta=-25,phi=45,
+          xlab="u",ylab="v",zlab="log relative risk",zlim=c(-3,3))
 
     title("Log relative risk surface")
 
@@ -315,7 +317,7 @@ for (i in 1:sim) {
   rrand$fhat <- log(frand$fhat/grand$fhat)
 
 # calcuate test statistic (omit Inf's and NA's)
-  test.stat.sim[i] <- sum( (rrand$fhat[is.finite(rrand$fhat) & !is.na(rrand$fhat)]/(diff(casdens$x1)[1]*diff(casdens$x2)[1]))^2 )
+  test.stat.sim[i] <- sum( (rrand$fhat[is.finite(rrand$fhat) &                     !is.na(rrand$fhat)]/(diff(casdens$x1)[1]*diff(casdens$x2)[1]))^2 )
 
 # assign row of z values to matrix of simulation values
 
@@ -331,7 +333,8 @@ for (i in 1:sim) {
 par(mfrow=c(1,1),pty="m")
 hist(test.stat.sim,nclass=25,
          main=paste("test stat = ",round(test.stat.obs,9),", pval = ",
-         round(length(test.stat.sim[test.stat.sim>test.stat.obs])/length(test.stat.sim),4)))
+         round(length(test.stat.sim[test.stat.sim>test.stat.obs])/
+                 length(test.stat.sim),4)))
 segments(test.stat.obs,0,test.stat.obs,400,col="red")
 #dev.off()
 
@@ -396,7 +399,8 @@ Now plot (map) the results!
 #pdf("dentalKD.tol700.KS.pdf",width=11,height=8)
 par(mfrow=c(1,2),pty="s")
 
-    persp(casdens$x1,casdens$x2,r.ks,theta=-25,phi=45,xlab="u",ylab="v",zlab="Log relative risk",zlim=c(-3,3))
+    persp(casdens$x1,casdens$x2,r.ks,theta=-25,phi=45,
+          xlab="u",ylab="v",zlab="Log relative risk",zlim=c(-3,3))
     title(paste("Log relative risk surface"),cex.main=1.5)
 
     plot(dentcon.p,pch=" ",xlim=c(min(dental$x)-extra,max(dental$x)+extra),
@@ -426,9 +430,9 @@ par(mfrow=c(1,2),pty="s")
 
 points(rx[r.ks>quant.95.mat],ry[r.ks>quant.95.mat],pch="+",cex=1.5)
 points(rx[r.ks<quant.05.mat],ry[r.ks<quant.05.mat],pch="-",cex=1.5)
-#dev.off()
+#dev,off()
 ```
 
 ***
 
-Since this example doesn't have strong clustering, the only symbol added are 2 "-" symbols along the lower left edge.   
+Since this example doesn't have strong clustering, the only symbols added are 2 "-" symbols along the lower left edge.   
