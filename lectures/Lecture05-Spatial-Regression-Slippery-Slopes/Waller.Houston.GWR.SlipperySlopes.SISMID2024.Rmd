@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 This file reads in data from a shapefile of Houston census tracts (using the same code in the markdown file we used for Lecture 2). 
 
-Next we will use "spgwr" to fit geographically weighted regression.
+Next we will use "spgwr" to fit geographically weighted regression to see if the associations between tract-level (standardized) alcohol sales or illegal drug arrests are correlated with tract-level violent crime rates.
 
 ***
 
@@ -35,154 +35,128 @@ pacman::p_load(sf, #replaces "maptools", "rgdal" and other deprecated packages
 ##Read in shapefile - Houston Census Tracts
 houston = read_sf(dsn = here("data") , layer = "HoustonENAR2012final")
 
-plot(houston)
-```
-
-***
-
-Now to plot the map outlines (same code as before)
-
-***
-
-```{r}
-##Map the tracts using plot...old school
-plot(houston['POP2000'])
-#Add a title
-title(main="Population 2000",
+##Map the tracts using plot...
+plot(houston['POP2000'],main="Population 2000",
       sub="Quantile (Equal-Frequency) Class Intervals")
-# Here are the outlines
-
-plot(houston)
 
 ```
 
-***
-
-Now set up the covariates and map the data (same code as Lecture 2)
 
 ***
 
-```{r}
-# Divide by the 2000 population to get the rate
-houston$violence.rate = houston$violence_2/houston$tot_pop
+That's a pretty vivid color scheme, let's use tmap's tm_shape to draw nicer maps of the (standardized) violence rate, and the two covariates.  (Similar code to that from Lecture 2).
 
-violence_map <- tm_shape(houston) + 
-  tm_fill('violence.rate', 
-style='quantile', 
-palette='BuPu', 
-title='Violent Crimes \n Per Capita') + 
-  tm_borders(alpha=0.2) + 
-  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
-             position=c('RIGHT', 'BOTTOM')) + 
-  tm_layout(main.title="Violent Crime Rate in Houston, TX",
-            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
-            main.title.size=1.2, legend.title.size=0.8)
-violence_map
+***
 
 
-alc_map <- tm_shape(houston) + 
-  tm_fill('Zl_total', 
-style='quantile', 
-palette='BuPu', 
-title='Standardized Log \n Total Alcohol Sales') + # "\n" moves text to the next line 
-  tm_borders(alpha=0.2) + 
-  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
-             position=c('RIGHT', 'BOTTOM')) + 
-  tm_layout(main.title="Alcohol Sales in Houston, TX",
-            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
-            main.title.size=1.2, legend.title.size=0.8)
-alc_map
-
-drug_map <- tm_shape(houston) + 
-  tm_fill('Zl_drug', 
-style='quantile', 
-palette='BuPu', 
-title='Standardized Log \n Illegal Drug Arrests') + 
-  tm_borders(alpha=0.2) + 
-  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
-             position=c('RIGHT', 'BOTTOM')) + 
-  tm_layout(main.title="Illegal Drug Arrests in Houston, TX",
-            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
-            main.title.size=1.2, legend.title.size=0.8)
-drug_map
-
-
-tmap_arrange(violence_map, alc_map, drug_map)
-```
 =======
 # The data table has a lot of census data and various transformations
 # of the violent crime, alcohol sales, and drug arrest data.  The next
 # section pulls the values we want.
 
 # Outcome:  Number of violent crimes by tract
-violence = houston@data$violence_2
+violence = houston$violence_2
 
 # Divide by the 2000 population to get the rate
-violence.rate = violence/houston@data$tot_pop
+violence.rate = violence/houston$tot_pop
 
 # Covariate 1 (log standardized total alcohol sales)
-Z.log.total = houston@data$Zl_total
+Z.log.total = houston$Zl_total
 
 # Covariate 2 (log standardized illegal drug arrests)
-Z.log.drug = houston@data$Zl_drug
+Z.log.drug = houston$Zl_drug
 
-# set up maps 2 rows of 2 plots each.
-#par(mfrow=c(2,2))
+------------------------------------------------------------------------
 
-# Plot Outcome first
-plot(houston)
-# Define the number of classes
-nclr <- 5  # quintiles
-# Use RColorBrewer to choose the colors
-plotclr <- brewer.pal(nclr,"BuPu")
-class <- classIntervals(violence.rate, nclr, style="quantile")
-colcode <- findColours(class, plotclr)
-#Fill in the tracts with the colors
-plot(houston, col=colcode, add=T)
-#Add a title
-title(main="Violence Rate",
-    sub="Quantile (Equal-Frequency) Class Intervals")
-#Add a legend  (Coordinates are in longitude, latitude).
-legend(-95.7, 29.65, legend=names(attr(colcode, "table")),
-    fill=attr(colcode, "palette"), cex=0.6, bty="n")
 
-# Next plot stdized log total alcohol sales
-plot(houston)
-# Define the number of classes
-nclr <- 5  # quintiles
-# Use RColorBrewer to choose the colors
-plotclr <- brewer.pal(nclr,"BuPu")
-class <- classIntervals(Z.log.total, nclr, style="quantile")
-colcode <- findColours(class, plotclr)
-#Fill in the tracts with the colors
-plot(houston, col=colcode, add=T)
-#Add a title
-title(main="Std log total sales",
-    sub="Quantile (Equal-Frequency) Class Intervals")
-#Add a legend  (Coordinates are in longitude, latitude).
-legend(-95.7, 29.65, legend=names(attr(colcode, "table")),
-    fill=attr(colcode, "palette"), cex=0.6, bty="n")
 
-# Next plot stdized log illegal arrests
-plot(houston)
-# Define the number of classes
-nclr <- 5  # quintiles
-# Use RColorBrewer to choose the colors
-plotclr <- brewer.pal(nclr,"BuPu")
-class <- classIntervals(Z.log.drug, nclr, style="quantile")
-colcode <- findColours(class, plotclr)
-#Fill in the tracts with the colors
-plot(houston, col=colcode, add=T)
-#Add a title
-title(main="Std log drug arrests",
-    sub="Quantile (Equal-Frequency) Class Intervals")
-#Add a legend  (Coordinates are in longitude, latitude).
-legend(-95.7, 29.65, legend=names(attr(colcode, "table")),
-    fill=attr(colcode, "palette"), cex=0.6, bty="n")
+```{r}
+# Divide by the 2000 population to get the rate
+houston$violence.rate = houston$violence_2/houston$tot_pop
 
->>>>>>> 1229a265105ae69160fe8c28ca27647c2b02910c
-# This matches Figure 1 in Waller et al. 2007
+# Look at all 9 hex codes in BuPu
+#scales::show_col(brewer.pal(9,name="BuPu"))
+# Saves all 9 hex codes to a palette
+all_colors <- brewer.pal(9, "BuPu")
+# Subset to start from the third color
+subset_colors <- all_colors[3:(1+6)]
+#Display the colors
+#subset_colors
+
+violence_map <- tm_shape(houston) + 
+  tm_fill('violence.rate', 
+style='quantile', 
+#midpoint = median(houston$violence.rate),
+palette=subset_colors, 
+title='Violent Crimes \n Per Capita') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Violent Crime Rate in Houston, TX",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=1.2, legend.title.size=0.5,  
+            legend.text.size=0.5)
+violence_map
 ```
+
+
+------------------------------------------------------------------------
+
+Next, map standardized log total alcohol sales. 
+
+```{r}
+alc_map <- tm_shape(houston) + 
+  tm_fill('Zl_total', 
+style='quantile', 
+palette=subset_colors, 
+midpoint = mean(houston$Zl_total),
+title='Standardized Log \n Total Alcohol Sales') + # "\n" moves text to the next line 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Alcohol Sales in Houston, TX",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=1.2, legend.title.size=0.5,  
+            legend.text.size=0.5)
+alc_map
+```
+
+------------------------------------------------------------------------
+
+Finally, plot standardized log illegal drug arrests. 
+
+```{r}
+drug_map <- tm_shape(houston) + 
+  tm_fill('Zl_drug', 
+style='quantile', 
+palette=subset_colors, 
+midpoint=mean(houston$Zl_drug),
+title='Standardized Log \n Illegal Drug Arrests') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Illegal Drug Arrests in Houston, TX",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=1.2, legend.title.size=0.5,  
+            legend.text.size=0.5)
+drug_map
+
+```
+
+These three figures will match the maps in Figure 1 of:
+
+Waller LA, Zhu L, Gotway CA, Gorman DM, and Gruenewald PJ (2007)
+"Quantifying geographic variations in associations between alcohol
+distribution and violence: A comparison of geographically weighted
+regression and spatially varying coefficient models". Stochastic
+Environmental Research and Risk Assessment.21, 573-588.
+
+Let's use tmap to make a multiple-map single figure.
+
+```{r}
+tmap_arrange(violence_map, alc_map, drug_map)
+```
+
 
 ***
 
@@ -214,7 +188,7 @@ houston.sp <- houston %>%
   as('Spatial')
 DM <- gw.dist(dp.locat = coordinates(houston.sp))
 head(houston)
-houston.bw <- bw.gwr (violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)), 
+houston.bw <- bw.gwr (violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)),
              data = houston.sp, 
              adaptive=TRUE, 
              dMat=DM)
@@ -228,82 +202,70 @@ bgwr <- ggwr.basic(violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)),
                       dMat = DM)
 ```
 
-Model Diagnostics 
-
-First, check local multi-collinearity
-
-```{r}
-collin <- gwr.collin.diagno(violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)),
-                            data = houston.sp,
-                            adaptive = T,
-                            dMat = DM,
-                            bw = houston.bw)
-                            
-names(collin$SDF)
-
-summary(collin$SDF$'local_CN')
-
-#Plot local condtion number 
-tm_shape(collin$SDF) +
-  tm_fill('local_CN',
-          style = 'fixed',
-          breaks = c(0,15,25,30,35),
-          palette = '-PRGn')+
-  tm_borders(alpha = 0.2) 
-  
-## Looks good! 
-
-
-#Plot variance inflation factor
-
-tm_shape(collin$SDF) +
-  tm_fill(c('Zl_total_VIF', 'Zl_drug_VIF'),
-          style = 'fixed',
-          breaks = c(0,1, 2, 3, 4),
-          palette = '-PRGn') +
-  tm_borders(alpha = 0.2) 
-```
-
 
 ***
 Now to map the results.
 
-The houston.ggwr object contains an element called SDF which contains the spatial data frame (SDF) of the outcomes.  We will want to map the (spatially varying) intercept and the parameters associated with each of our two covariates.  The notation is tricky since the spatial data frame is within the
- houston.ggwr object.
+The houston.ggwr object contains an element called SDF which contains the spatial data frame (SDF) of the outcomes.  We will want to map the (spatially varying) intercept and the parameters associated with each of our two covariates.  The notation is tricky since the spatial data frame is within the houston.ggwr object.
  
 ***
 
-```{r, warning=FALSE}
-# Create a spatial object delineating statistically significant INTERCEPT coefficients
-names(bgwr$SDF)
-t.adj <- gwr.t.adjust(bgwr)
+Plot the map of intercept estimates
 
-intercept.p <- t.adj$SDF %>%
-  st_as_sf() %>%
-  mutate(pval = ifelse(Intercept_p_by <0.05, 1, 0)) %>%
-  group_by(pval) %>%
-  summarise(count = n()) %>%
-  filter(pval ==1)
-intercept.p
+```{r}
+intercept_map <- tm_shape(bgwr$SDF) + 
+  tm_fill('Intercept', 
+style='quantile', 
+palette=subset_colors, 
+title='GWR Intercepts') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Intercept",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=0.8, legend.title.size=0.5,  
+            legend.text.size=0.5)
+intercept_map
+```
 
-# Create a spatial object delineating statistically significant DRUG coefficients
-drug.p <- t.adj$SDF %>%
-  st_as_sf() %>%
-  mutate(pval = ifelse(Zl_drug_p_by <0.05, 1, 0)) %>%
-  group_by(pval) %>%
-  summarise(count = n()) %>%
-  filter(pval ==1)
-drug.p
+Plot the map of estimates of association with standardized total alcohol sales.
 
-# Create a spatial object delineating statistically significant ALCOHOL coefficients
-alc.p <- t.adj$SDF %>%
-  st_as_sf() %>%
-  mutate(pval = ifelse(Zl_total_p_by <0.05, 1, 0)) %>%
-  group_by(pval) %>%
-  summarise(count = n()) %>%
-  filter(pval ==1)
+```{r}
+beta_alcohol_map <- tm_shape(bgwr$SDF) + 
+  tm_fill('Zl_total', 
+style='quantile', 
+palette=subset_colors, 
+title='GWR beta-hat for standardized total alcohol sales') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Beta Standardized Total Alcohol Sales",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=0.8, legend.title.size=0.5,  
+            legend.text.size=0.5)
+beta_alcohol_map
+```
 
-alc.p
+```{r}
+beta_drug_map <- tm_shape(bgwr$SDF) + 
+  tm_fill('Zl_drug', 
+style='quantile', 
+palette=subset_colors, 
+title='GWR beta-hat for standardized illegal drug arrests') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Beta Standardized Illegal Drug Arrests",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=0.8, legend.title.size=0.5,  
+            legend.text.size=0.5)
+beta_drug_map
+```
+
+Now make multi-map figure of all three maps
+
+```{r}
+tmap_arrange(intercept_map, beta_alcohol_map, beta_drug_map)
 ```
 
 ***
@@ -316,10 +278,10 @@ These are very smooth maps.   Let's try it with a smaller bandwidth.
 # Try with a smaller, fixed bandwidth (1/4 the size of the other)
 # This is closer to what is presented in Figure 5 of Waller et al. 2007
 
-ggwr =ggwr.basic(violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)), 
+ggwr.bwdiv4 =ggwr.basic(violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)), 
                       data =houston.sp,
                       family = "poisson",
-                      bw = houston.bw/4, 
+                      bw = (houston.bw/4), 
                       kernel = "bisquare", 
                       adaptive = TRUE,
                       dMat = DM)
@@ -332,59 +294,70 @@ ggwr =ggwr.basic(violence_2 ~ Zl_total + Zl_drug + offset(log(POP2000)),
 # associated with each of our two covariates.
 #  The notation is tricky since the spatial data frame is within the
 # houston.ggwr object.
-ggwr$SDF@data
-intercepts = ggwr$SDF@data$X.Intercept
-alcohol.effects = ggwr$SDF@data$Z.log.total
-drug.effects = ggwr$SDF@data$Z.log.drug
-
-# Plot the outlines first
-plot(houston)
-# Define the number of classes
-nclr <- 5  # quintiles
-# Use RColorBrewer to choose the colors
-plotclr <- brewer.pal(nclr,"BuPu")
-class <- classIntervals(intercepts, nclr, style="quantile")
-colcode <- findColours(class, plotclr)
-#Fill in the tracts with the colors
-plot(houston, col=colcode, add=T)
-#Add a title
-title(main="GGWR Intercepts",
-    sub="Quantile (Equal-Frequency) Class Intervals")
-#Add a legend  (Coordinates are in longitude, latitude).
-legend(-95.7, 29.65, legend=names(attr(colcode, "table")),
-    fill=attr(colcode, "palette"), cex=0.6, bty="n")
-
-# Plot the outlines first
-plot(houston)
-# Define the number of classes
-nclr <- 5  # quintiles
-# Use RColorBrewer to choose the colors
-plotclr <- brewer.pal(nclr,"BuPu")
-class <- classIntervals(alcohol.effects, nclr, style="quantile")
-colcode <- findColours(class, plotclr)
-#Fill in the tracts with the colors
-plot(houston, col=colcode, add=T)
-#Add a title
-title(main="GGWR Alcohol",
-    sub="Quantile (Equal-Frequency) Class Intervals")
-#Add a legend  (Coordinates are in longitude, latitude).
-legend(-95.7, 29.65, legend=names(attr(colcode, "table")),
-    fill=attr(colcode, "palette"), cex=0.6, bty="n")
-
-# Plot the outlines first
-plot(houston)
-# Define the number of classes
-nclr <- 5  # quintiles
-# Use RColorBrewer to choose the colors
-plotclr <- brewer.pal(nclr,"BuPu")
-class <- classIntervals(drug.effects, nclr, style="quantile")
-colcode <- findColours(class, plotclr)
-#Fill in the tracts with the colors
-plot(houston, col=colcode, add=T)
-#Add a title
-title(main="GGWR Drug",
-    sub="Quantile (Equal-Frequency) Class Intervals")
-#Add a legend  (Coordinates are in longitude, latitude).
-legend(-95.7, 29.65, legend=names(attr(colcode, "table")),
-    fill=attr(colcode, "palette"), cex=0.6, bty="n")
+# ggwr$SDF@data
+intercepts = ggwr.bwdiv4$SDF@data$Intercept
+alcohol.effects = ggwr.bwdiv4$SDF@data$Zl_total
+drug.effects = ggwr.bwdiv4$SDF@data$Zl_drug
 ```
+
+Plot the map of intercept estimates
+
+```{r}
+intercept_map_bwdiv4 <- tm_shape(ggwr.bwdiv4$SDF) + 
+  tm_fill('Intercept', 
+style='quantile', 
+palette=subset_colors, 
+title='GWR Intercepts') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Intercept",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=0.8, legend.title.size=0.5,  
+            legend.text.size=0.5)
+intercept_map_bwdiv4
+```
+
+Plot the map of estimates of association with standardized total alcohol sales.
+
+```{r}
+beta_alcohol_map_bwdiv4 <- tm_shape(ggwr.bwdiv4$SDF) + 
+  tm_fill('Zl_total', 
+style='quantile', 
+palette=subset_colors, 
+title='GWR beta-hat for standardized total alcohol sales') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Beta Standardized Total Alcohol Sales",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=0.8, legend.title.size=0.5,  
+            legend.text.size=0.5)
+beta_alcohol_map_bwdiv4
+```
+
+Plot the map of estimates of association with standardized illegal drug arrests
+
+```{r}
+beta_drug_map_bwdiv4 <- tm_shape(ggwr.bwdiv4$SDF) + 
+  tm_fill('Zl_drug', 
+style='quantile', 
+palette=subset_colors, 
+title='GWR beta-hat for standardized illegal drug arrests') + 
+  tm_borders(alpha=0.7) + 
+  tm_credits('Quantile (Equal-Frequency) Class Intervals', 
+             position=c('RIGHT', 'BOTTOM')) + 
+  tm_layout(main.title="Beta Standardized Illegal Drug Arrests",
+            inner.margins = c(0.1, 0.1, 0.05, 0.05), 
+            main.title.size=0.8, legend.title.size=0.5,  
+            legend.text.size=0.5)
+beta_drug_map_bwdiv4
+```
+
+
+Now make multi-map figure of all three maps
+
+```{r}
+tmap_arrange(intercept_map_bwdiv4, beta_alcohol_map_bwdiv4, beta_drug_map_bwdiv4)
+```
+
